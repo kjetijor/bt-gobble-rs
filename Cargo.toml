@@ -1,0 +1,20 @@
+[package]
+name = "bt-gobble-rs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bluer = { git = "https://github.com/bluez/bluer", rev = "c271e92", features = ["bluetoothd"] }
+tokio = { version = "1.32.0", features = ["full"] }
+env_logger = "0.10"
+log = "0.4"
+futures = "0.3.28"
+serde = { version = "1.0.183", features = ["derive"] }
+serde_yaml = "0.9.25"
+prometheus-client = "0.21.2"
+clap = { version = "4.3.23", features = ["cargo"] }
+
+[dev-dependencies]
+similar-asserts = "1.4.2"
