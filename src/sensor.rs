@@ -23,7 +23,7 @@ macro_rules! i16_at {
 #[derive(Debug, PartialEq)]
 pub struct WaterSensor {
     pub flags: u8,
-    pub voltage: i16,
+    pub voltages: Vec<i16>,
     pub seq: u8,
 }
 
@@ -37,10 +37,11 @@ impl WaterSensor {
             return Err(ParseError::BadWaterMagic((d[0] as u16) << 8 | d[1] as u16));
         }
         log::debug!("water data at {:x} {:x}", &d[4], &d[5]);
-        let voltage = i16_at!(d, 4);
+        let voltages = vec![i16_at!(d, 4), i16_at!(d,6)];
+
         Ok(WaterSensor {
             flags: d[2],
-            voltage: voltage,
+            voltages: voltages,
             seq: d[3],
         })
     }
@@ -61,14 +62,18 @@ impl SensorData for WaterSensor {
         let raw_flags = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         r.register("raw_flags", "Raw flag value", raw_flags.clone());
         raw_flags.get_or_create(&base_labels).set(self.flags as f64);
+
         let raw_adc = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         r.register("raw_adc", "Raw ADC reading", raw_adc.clone());
-        raw_adc.get_or_create(&base_labels).set(self.voltage as f64);
         let voltage = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         r.register("voltage", "Voltage", voltage.clone());
-        // Interpreted value https://learn.adafruit.com/introducing-the-adafruit-nrf52840-feather/nrf52-adc
-        let voltage_value = 3600f64 / 1024f64 * (self.voltage  & 0x4000) as f64;
-        voltage.get_or_create(&base_labels).set(voltage_value);
+        for (idx, raw_adc_val) in self.voltages.iter().enumerate() {
+            let mut labels = base_labels.clone();
+            labels.push(("adc".to_owned(), format!("{}", idx)));
+            let voltage_value = 3600f64 / 4096f64 * (raw_adc_val & 0x4000) as f64;
+            raw_adc.get_or_create(&labels).set(*raw_adc_val as f64);
+            voltage.get_or_create(&labels).set(voltage_value);
+        }
     }
 }
 
@@ -217,26 +222,26 @@ mod test {
     #[test]
     fn test_good_water() {
         let tcs = [(
-            [b'L', b'K', 0x01, 0x02, 0x00, 0x00],
+            [b'L', b'K', 0x01, 0x02, 0x00, 0x00, 0x00, 0x00],
             WaterSensor {
                 flags: 0x01,
-                voltage: 0,
+                voltages: vec![0,0],
                 seq: 0x02,
             },
         ),
         (
-            [b'L', b'K', 0x00, 0xff, 0xff, 0xff],
+            [b'L', b'K', 0x00, 0xff, 0xff, 0xff, 0xff, 0xff],
             WaterSensor {
                 flags: 0x00,
-                voltage: -1,
+                voltages: vec![-1,-1],
                 seq: 255,
             },    
         ),
         (
-            [0x4c, 0x4b, 0x01, 0x4a, 0x0d, 0xb0],
+            [0x4c, 0x4b, 0x01, 0x4a, 0x0d, 0xb0, 0x1a, 0xa1],
             WaterSensor{
                 flags: 0x01,
-                voltage: 0x0db0,
+                voltages: vec![0x0db0, 0x1aa1],
                 seq: 0x4a,
             }
 

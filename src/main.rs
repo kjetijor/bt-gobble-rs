@@ -365,6 +365,8 @@ fn load_blocklist_file(l: &String) -> Vec<bluer::Address> {
         .collect()
 }
 
+const GIT_REV: &'static str = env!("GIT_REV");
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> bluer::Result<()> {
     let matches = Command::new("bt-gobble-rs")
@@ -503,7 +505,7 @@ async fn main() -> bluer::Result<()> {
     });
 
     debug!("known devices is {:?}", known_devices);
-    info!("bt-gobble-rs starting");
+    info!("bt-gobble-rs starting {GIT_REV}");
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
     let mm = adapter.monitor().await?;
