@@ -108,11 +108,10 @@ const STALE_MARKER: &str = "# Stale after ";
 fn get_file_stale(pb: &PathBuf) -> Result<Option<Duration>, StaleFileError> {
     let contents = std::fs::read_to_string(pb)?;
     let spl: Vec<_> = contents
-        .split("\n")
-        .into_iter()
+        .split('\n')
         .filter(|s| s.starts_with(STALE_MARKER))
         .collect();
-    if spl.len() == 0 {
+    if spl.is_empty() {
         return Err(StaleFileError::MarkerNotFound);
     }
     let first = spl[0];
@@ -188,7 +187,7 @@ fn write_metrics(
     let tmpfn = tmpbuf.as_path();
     let dstfn = dstbuf.as_path();
     let mut ofh = std::fs::File::create(tmpfn)?;
-    write!(ofh, "{}{}\n", STALE_MARKER, stale)?;
+    writeln!(ofh, "{}{}", STALE_MARKER, stale)?;
     let mut registry = match &opts.metric_prefix {
         Some(prefix) => <Registry>::with_prefix(prefix),
         None => <Registry>::default(),
@@ -270,7 +269,7 @@ fn load_known_devices_from_reader(
     allow_empty: bool,
 ) -> Result<Vec<KnownDevice>, LoadKnownError> {
     let kd: Vec<KnownDevice> = serde_yaml::from_reader(r)?;
-    if allow_empty && kd.len() == 0 {
+    if allow_empty && kd.is_empty() {
         return Err(LoadKnownError::Empty);
     }
     Ok(kd)
@@ -292,7 +291,7 @@ enum ParseLabelsError {
 }
 
 fn bad_label_part(s: &str) -> Option<ParseLabelsError> {
-    if s.len() == 0 {
+    if s.is_empty() {
         return Some(ParseLabelsError::EmptyString);
     }
     for char in s.chars() {
@@ -353,19 +352,17 @@ fn load_blocklist_file(l: &String) -> Vec<bluer::Address> {
     };
     input
         .iter()
-        .map(|addrstr| match bluer::Address::from_str(addrstr) {
+        .filter_map(|addrstr| match bluer::Address::from_str(addrstr) {
             Err(e) => {
                 warn!("Failed to parse address string {} {:?}", addrstr, e);
                 None
             }
             Ok(a) => Some(a),
         })
-        .filter(|x| x.is_some())
-        .map(|x| x.unwrap())
         .collect()
 }
 
-const GIT_REV: &'static str = env!("GIT_REV");
+const GIT_REV: &str = env!("GIT_REV");
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> bluer::Result<()> {
@@ -465,7 +462,7 @@ async fn main() -> bluer::Result<()> {
         dir: metrics_dir.to_owned(),
         file_prefix: file_prefix.to_owned(), // validate
         metric_prefix: metric_prefix.map(|s| s.to_owned()), // validate
-        const_labels: const_labels,          // validate
+        const_labels,          // validate
         stale_after: Duration::from_secs_f64(*stale_secs), //validate <set min ?>
     };
     //    panic!("config {:?}", writeopts);
@@ -480,7 +477,7 @@ async fn main() -> bluer::Result<()> {
     } else {
         Vec::new()
     };
-    if !allow_empty_known_file && known_devices.len() == 0 {
+    if !allow_empty_known_file && known_devices.is_empty() {
         error!("Empty known devices and not allowing empty known devices");
         return Ok(());
     }
@@ -570,7 +567,7 @@ async fn main() -> bluer::Result<()> {
                     .into_iter()
                     .filter(|kd| kd.addr == dev.address())
                     .collect();
-                let add_labels: Vec<(String, String)> = if kd.len() > 0 {
+                let add_labels: Vec<(String, String)> = if !kd.is_empty() {
                     kd[0]
                         .labels
                         .iter()

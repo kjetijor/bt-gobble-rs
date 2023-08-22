@@ -41,7 +41,7 @@ impl WaterSensor {
 
         Ok(WaterSensor {
             flags: d[2],
-            voltages: voltages,
+            voltages,
             seq: d[3],
         })
     }
@@ -192,7 +192,7 @@ impl RuuviData {
         let pressure: u64 = raw_pressure as u64 + 50_000;
         let voltage = 1.6 + ((raw_voltage >> 5) as f64) / 1000f64;
 
-        return Ok(RuuviData {
+        Ok(RuuviData {
             temperature_c,
             rel_humidity,
             pressure,
@@ -203,7 +203,7 @@ impl RuuviData {
             acc_z,
             seq,
             hwaddr,
-        });
+        })
     }
 }
 
@@ -324,8 +324,8 @@ mod test {
             + "# TYPE move_count gauge\n"
             + "move_count{name=\"testdevice\",device_type=\"ruuvi\",hwaddr=\"01:02:03:04:05:06\"} 10.0\n"
             + "# EOF\n";
-        let mut el: Vec<String> = expected.split("\n").map(|s| s.to_owned()).collect();
-        let mut gl: Vec<String> = buffer.split("\n").map(|s| s.to_owned()).collect();
+        let mut el: Vec<String> = expected.split('\n').map(|s| s.to_owned()).collect();
+        let mut gl: Vec<String> = buffer.split('\n').map(|s| s.to_owned()).collect();
         let expected_noacc: Vec<String> = el
             .clone()
             .into_iter()
