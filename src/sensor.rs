@@ -62,7 +62,9 @@ impl SensorData for WaterSensor {
         let raw_flags = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         r.register("raw_flags", "Raw flag value", raw_flags.clone());
         raw_flags.get_or_create(&base_labels).set(self.flags as f64);
-
+        let seq = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
+        r.register("sequence", "Sequence number", seq.clone());
+        seq.get_or_create(&base_labels).set(self.seq as f64);
         let raw_adc = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         r.register("raw_adc", "Raw ADC reading", raw_adc.clone());
         let voltage = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
