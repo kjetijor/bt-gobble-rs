@@ -581,8 +581,8 @@ async fn main() -> Result<(), ProgramError> {
     let mut monitor_handle = mm
         .register(Monitor {
             monitor_type: bluer::monitor::Type::OrPatterns,
-            rssi_low_threshold: None,
-            rssi_high_threshold: None,
+            rssi_low_threshold: Some(-127),
+            rssi_high_threshold: Some(20),
             rssi_low_timeout: Some(Duration::from_secs(5)),
             rssi_high_timeout: Some(Duration::from_secs(5)),
             rssi_sampling_period: Some(RssiSamplingPeriod::First),
