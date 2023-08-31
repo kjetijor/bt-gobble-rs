@@ -379,6 +379,8 @@ impl From<bluer::Error> for ProgramError {
 }
 
 const GIT_REV: &str = env!("GIT_REV");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), ProgramError> {
@@ -386,6 +388,7 @@ async fn main() -> Result<(), ProgramError> {
         std::env::set_var("RUST_LOG", format!("{}=INFO", std::module_path!()));
     }
     env_logger::init();
+    info!("bt-gobble-rs ({VERSION}/{GIT_REV}) starting");
     let matches = Command::new("bt-gobble-rs")
         .arg(
             Arg::new("metrics-dir")
@@ -562,7 +565,6 @@ async fn main() -> Result<(), ProgramError> {
     });
 
     debug!("known devices is {:?}", known_devices);
-    info!("bt-gobble-rs ({GIT_REV}) starting");
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
     let mm = adapter.monitor().await?;
