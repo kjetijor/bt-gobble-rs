@@ -72,7 +72,14 @@ impl SensorData for WaterSensor {
         for (idx, raw_adc_val) in self.voltages.iter().enumerate() {
             let mut labels = base_labels.clone();
             labels.push(("adc".to_owned(), format!("{}", idx)));
-            let voltage_value = 3600f64 / 4096f64 * (raw_adc_val & 0x4000) as f64;
+            const CLAMP: i16 = 0x0fff;
+            let voltage_value = 3600f64 / 4096f64 * if *raw_adc_val > CLAMP {
+                CLAMP
+            } else if *raw_adc_val < -CLAMP {
+                -CLAMP
+            } else {
+                *raw_adc_val
+            } as f64;
             raw_adc.get_or_create(&labels).set(*raw_adc_val as f64);
             voltage.get_or_create(&labels).set(voltage_value);
         }
@@ -162,7 +169,7 @@ impl SensorData for RuuviData {
         acc.get_or_create(&acc_z_labels).set(self.acc_z.into());
 
         let seq = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
-        r.register("sequence", "sequence number", seq.clone());
+        r.register("sequence", "Sequence number", seq.clone());
         seq.get_or_create(&base_labels).set(self.seq as f64);
         let mvct = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         r.register("move_count", "number of move events", mvct.clone());

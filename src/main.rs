@@ -1,4 +1,7 @@
-use bluer::monitor::{Monitor, MonitorEvent, Pattern, RssiSamplingPeriod};
+#[cfg(test_decoder)]
+mod decode;
+
+use bluer::{monitor::{Monitor, MonitorEvent, Pattern, RssiSamplingPeriod}, Address};
 use clap::{Arg, ArgAction, Command};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
@@ -336,7 +339,7 @@ fn parse_label(l: &str) -> Result<(String, String), ParseLabelsError> {
     }
 }
 
-fn load_blocklist_file(l: &String) -> Vec<bluer::Address> {
+fn load_addrlist_file(l: &String) -> Vec<bluer::Address> {
     let input: Vec<String> = match std::fs::read_to_string(l) {
         Err(e) => {
             warn!("Failed to read blocklist from {} {:?}", l, e);
@@ -362,10 +365,27 @@ fn load_blocklist_file(l: &String) -> Vec<bluer::Address> {
         .collect()
 }
 
+#[derive(Debug)]
+enum ProgramError {
+    BluerError(bluer::Error),
+    BlocklistAllowlistError,
+    EmptyKnownDevices,
+}
+
+impl From<bluer::Error> for ProgramError {
+    fn from(value: bluer::Error) -> Self {
+        ProgramError::BluerError(value)
+    }
+}
+
 const GIT_REV: &str = env!("GIT_REV");
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> bluer::Result<()> {
+async fn main() -> Result<(), ProgramError> {
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", format!("{}=INFO", std::module_path!()));
+    }
+    env_logger::init();
     let matches = Command::new("bt-gobble-rs")
         .arg(
             Arg::new("metrics-dir")
@@ -414,7 +434,18 @@ async fn main() -> bluer::Result<()> {
         .arg(
             Arg::new("block")
                 .long("block")
-                .short('b')
+                .short('B')
+                .action(ArgAction::Append),
+        )
+        .arg(
+            Arg::new("allowlist-file")
+                .long("allowlist-file")
+                .default_value("/etc/bt-gobbler/allowlist.yaml"),
+        )
+        .arg(
+            Arg::new("allow")
+                .long("allow")
+                .short('A')
                 .action(ArgAction::Append),
         )
         .get_matches();
@@ -441,9 +472,8 @@ async fn main() -> bluer::Result<()> {
     let blocklist_file = matches
         .get_one::<String>("blocklist-file")
         .expect("expected blocklist filename");
-
-    let mut blocklist_vec = load_blocklist_file(blocklist_file);
-
+    
+    let mut blocklist_vec = load_addrlist_file(blocklist_file);
     if let Some(blocks) = matches.get_many::<String>("block") {
         for block in blocks {
             match bluer::Address::from_str(block) {
@@ -453,23 +483,53 @@ async fn main() -> bluer::Result<()> {
         }
     }
 
-    let blocklist: HashMap<bluer::Address, ()> = blocklist_vec.into_iter().map(|a| (a, ())).collect();
-    for (bl, _) in blocklist.iter() {
-        info!("blocklist {}", bl.to_string());
+    let allowlist_file = matches
+        .get_one::<String>("allowlist-file")
+        .expect("expected allowlist filename");
+    let mut allowlist_vec = load_addrlist_file(allowlist_file);
+    if let Some(allows) = matches.get_many::<String>("allow") {
+        for allow in allows {
+            match bluer::Address::from_str(allow) {
+                Err(e) => warn!("Invalid address {} {:?}", allow, e),
+                Ok(a) => allowlist_vec.push(a),
+            }
+        }
     }
+
+    if allowlist_vec.len() != 0 && blocklist_vec.len() != 0 {
+        error!("Cannot have both allowlist and blocklist");
+        return Err(ProgramError::BlocklistAllowlistError);
+    }
+
+    let blocklist: HashMap<bluer::Address, ()> =
+        blocklist_vec.into_iter().map(|a| (a, ())).collect();
+
+    let allowlist: HashMap<bluer::Address, ()> =
+        allowlist_vec.into_iter().map(|a| (a, ())).collect();
+
+
+    let allowstr = blocklist.iter().fold(String::new(), |acc, (addr,_)| if acc.is_empty() {
+        addr.to_string()
+    } else {
+        format!("{},{}",acc,addr.to_string())
+    });
+
+    let blockstr = blocklist.iter().fold(String::new(), |acc, (addr, _)| if acc.is_empty() {
+        addr.to_string()
+    } else {
+        format!("{},{}",acc,addr.to_string())
+    });
+
+    info!("Allowlist: {allowstr}");
+    info!("Blocklist: {blockstr}");
 
     let writeopts = WriteMetricsOptions {
         dir: metrics_dir.to_owned(),
         file_prefix: file_prefix.to_owned(), // validate
         metric_prefix: metric_prefix.map(|s| s.to_owned()), // validate
-        const_labels,          // validate
+        const_labels,                        // validate
         stale_after: Duration::from_secs_f64(*stale_secs), //validate <set min ?>
     };
-    //    panic!("config {:?}", writeopts);
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", format!("{}=INFO", std::module_path!()));
-    }
-    env_logger::init();
 
     let known_devices = if let Some(kfn) = known_devices_file {
         load_known_devices_from_file(kfn, *allow_empty_known_file)
@@ -479,7 +539,7 @@ async fn main() -> bluer::Result<()> {
     };
     if !allow_empty_known_file && known_devices.is_empty() {
         error!("Empty known devices and not allowing empty known devices");
-        return Ok(());
+        return Err(ProgramError::EmptyKnownDevices);
     }
 
     let (tx_metrics, rx_metrics) = mpsc::channel::<Measurement>(10);
@@ -502,7 +562,7 @@ async fn main() -> bluer::Result<()> {
     });
 
     debug!("known devices is {:?}", known_devices);
-    info!("bt-gobble-rs starting {GIT_REV}");
+    info!("bt-gobble-rs ({GIT_REV}) starting");
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
     let mm = adapter.monitor().await?;
@@ -531,14 +591,23 @@ async fn main() -> bluer::Result<()> {
         })
         .await?;
 
+    let aliases: HashMap<Address,String> = known_devices.iter().map(|kd| (kd.addr.clone(), kd.name.clone())).collect();
     let mut have_tasks: HashMap<String, Arc<AtomicU64>> = HashMap::new();
     while let Some(mevt) = &monitor_handle.next().await {
         let ikd = known_devices.clone();
         let tx_metrics = tx_metrics.clone();
         if let MonitorEvent::DeviceFound(devid) = mevt {
-            if blocklist.contains_key(&devid.device) {
-                debug!("blocklisted {}", devid.device.to_string());
-                continue
+            if allowlist.len() > 0 {
+                if !allowlist.contains_key(&devid.device) {
+                    continue;
+                } else {
+                    debug!("not allowlisted {}", devid.device.to_string());
+                }
+            } else {
+                if blocklist.contains_key(&devid.device) {
+                    debug!("blocklisted {}", devid.device.to_string());
+                    continue;
+                }
             }
             let devkey = &devid.device.to_owned().to_string();
             let mut newdev = false;
@@ -557,8 +626,10 @@ async fn main() -> bluer::Result<()> {
             if oldval != 0 {
                 panic!("oldval != 0");
             }
-
-            info!("Discovered device {:?} (new: {:?})", devid, newdev);
+            let alias = aliases.get(&devid.device).map_or_else(
+                || "".to_owned(),
+                |alias|alias.clone());
+            info!("Discovered device {:?} (new: {:?}, alias: {})", devid, newdev, alias);
 
             let dev = adapter.device(devid.device)?;
             tokio::spawn(async move {
