@@ -567,17 +567,8 @@ async fn main() -> Result<(), ProgramError> {
     debug!("known devices is {:?}", known_devices);
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
-    let df = bluer::DiscoveryFilter {
-        rssi: None,
-        pattern: None,
-        pathloss: None,
-        transport: bluer::DiscoveryTransport::Le,
-        duplicate_data: true,
-        ..Default::default()
-    };
-    adapter.set_discovery_filter(df).await?;
-    let mm = adapter.monitor().await?;
     adapter.set_powered(true).await?;
+    let mm = adapter.monitor().await?;
     let mut monitor_handle = mm
         .register(Monitor {
             monitor_type: bluer::monitor::Type::OrPatterns,
@@ -585,7 +576,7 @@ async fn main() -> Result<(), ProgramError> {
             rssi_high_threshold: Some(20),
             rssi_low_timeout: Some(Duration::from_secs(5)),
             rssi_high_timeout: Some(Duration::from_secs(5)),
-            rssi_sampling_period: Some(RssiSamplingPeriod::First),
+            rssi_sampling_period: Some(RssiSamplingPeriod::Period(Duration::from_secs(1))),
             patterns: Some(vec![
                 Pattern {
                     data_type: 0xff,
@@ -601,7 +592,6 @@ async fn main() -> Result<(), ProgramError> {
             ..Default::default()
         })
         .await?;
-
     let aliases: HashMap<Address,String> = known_devices.iter().map(|kd| (kd.addr.clone(), kd.name.clone())).collect();
     let mut have_tasks: HashMap<String, Arc<AtomicU64>> = HashMap::new();
     while let Some(mevt) = &monitor_handle.next().await {
