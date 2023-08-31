@@ -567,6 +567,15 @@ async fn main() -> Result<(), ProgramError> {
     debug!("known devices is {:?}", known_devices);
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
+    let df = bluer::DiscoveryFilter {
+        rssi: None,
+        pattern: None,
+        pathloss: None,
+        transport: bluer::DiscoveryTransport::Le,
+        duplicate_data: true,
+        ..Default::default()
+    };
+    adapter.set_discovery_filter(df).await?;
     let mm = adapter.monitor().await?;
     adapter.set_powered(true).await?;
     let mut monitor_handle = mm
