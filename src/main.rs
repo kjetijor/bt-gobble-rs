@@ -1,6 +1,3 @@
-#[cfg(test_decoder)]
-mod decode;
-
 use bluer::{monitor::{Monitor, MonitorEvent, Pattern, RssiSamplingPeriod}, Address};
 use clap::{Arg, ArgAction, Command};
 use futures::StreamExt;
@@ -53,6 +50,7 @@ struct Measurement {
 
 #[derive(Debug)]
 enum WriteError {
+    #[allow(dead_code)]
     IOError(std::io::Error),
     FormatError(std::fmt::Error),
 }
@@ -79,6 +77,7 @@ struct WriteMetricsOptions {
     stale_after: Duration,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum StaleFileError {
     IOError(std::io::Error),
@@ -247,6 +246,7 @@ async fn metrics_writer_processor(
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum LoadKnownError {
     IOError(std::io::Error),
@@ -286,6 +286,7 @@ fn load_known_devices_from_file(
     load_known_devices_from_reader(rdr, allow_empty)
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum ParseLabelsError {
     BadChar(char),
@@ -345,13 +346,10 @@ fn load_addrlist_file(l: &String) -> Vec<bluer::Address> {
             warn!("Failed to read blocklist from {} {:?}", l, e);
             Vec::new()
         }
-        Ok(s) => serde_yaml::from_str(&s).map_or_else(
-            |e| {
+        Ok(s) => serde_yaml::from_str(&s).unwrap_or_else(|e| {
                 warn!("Failed to deserialize from {} {:?}", l, e);
                 Vec::new()
-            },
-            |v| v,
-        ),
+            }),
     };
     input
         .iter()
@@ -365,6 +363,7 @@ fn load_addrlist_file(l: &String) -> Vec<bluer::Address> {
         .collect()
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum ProgramError {
     BluerError(bluer::Error),
@@ -390,6 +389,11 @@ async fn main() -> Result<(), ProgramError> {
     env_logger::init();
     info!("bt-gobble-rs ({VERSION}/{GIT_REV}) starting");
     let matches = Command::new("bt-gobble-rs")
+        .arg(
+            Arg::new("adapter-name")
+                .long("adapter-name")
+                .short('i'),
+        )
         .arg(
             Arg::new("metrics-dir")
                 .long("metrics-dir")
@@ -452,6 +456,7 @@ async fn main() -> Result<(), ProgramError> {
                 .action(ArgAction::Append),
         )
         .get_matches();
+    let adapter_name = matches.get_one::<String>("adapter-name");
     let metrics_dir = matches
         .get_one::<String>("metrics-dir")
         .expect("No metrics dir given");
@@ -499,7 +504,7 @@ async fn main() -> Result<(), ProgramError> {
         }
     }
 
-    if allowlist_vec.len() != 0 && blocklist_vec.len() != 0 {
+    if !allowlist_vec.is_empty() && !blocklist_vec.is_empty() {
         error!("Cannot have both allowlist and blocklist");
         return Err(ProgramError::BlocklistAllowlistError);
     }
@@ -514,13 +519,13 @@ async fn main() -> Result<(), ProgramError> {
     let allowstr = blocklist.iter().fold(String::new(), |acc, (addr,_)| if acc.is_empty() {
         addr.to_string()
     } else {
-        format!("{},{}",acc,addr.to_string())
+        format!("{},{}",acc,addr)
     });
 
     let blockstr = blocklist.iter().fold(String::new(), |acc, (addr, _)| if acc.is_empty() {
         addr.to_string()
     } else {
-        format!("{},{}",acc,addr.to_string())
+        format!("{},{}",acc,addr)
     });
 
     info!("Allowlist: {allowstr}");
@@ -566,9 +571,18 @@ async fn main() -> Result<(), ProgramError> {
 
     debug!("known devices is {:?}", known_devices);
     let session = bluer::Session::new().await?;
-    let adapter = session.default_adapter().await?;
-    let mm = adapter.monitor().await?;
+    let adapter = match adapter_name {
+        Some(n) => session.adapter(n)?,
+        None => session.default_adapter().await?
+    };
+    let adapter_addr = adapter.address().await?;
+    info!("Opened adapter {}/{}", adapter.name(), adapter_addr.to_string());
     adapter.set_powered(true).await?;
+/* WTF?!
+    for prop in adapter.all_properties().await? {
+        debug!("adapter prop {:?}", prop);
+    }; */
+    let mm = adapter.monitor().await?;
     let mut monitor_handle = mm
         .register(Monitor {
             monitor_type: bluer::monitor::Type::OrPatterns,
@@ -576,7 +590,7 @@ async fn main() -> Result<(), ProgramError> {
             rssi_high_threshold: None,
             rssi_low_timeout: Some(Duration::from_secs(5)),
             rssi_high_timeout: Some(Duration::from_secs(5)),
-            rssi_sampling_period: Some(RssiSamplingPeriod::First),
+            rssi_sampling_period: Some(RssiSamplingPeriod::Period(Duration::from_secs(1))),
             patterns: Some(vec![
                 Pattern {
                     data_type: 0xff,
@@ -592,24 +606,21 @@ async fn main() -> Result<(), ProgramError> {
             ..Default::default()
         })
         .await?;
-
-    let aliases: HashMap<Address,String> = known_devices.iter().map(|kd| (kd.addr.clone(), kd.name.clone())).collect();
+    let aliases: HashMap<Address,String> = known_devices.iter().map(|kd| (kd.addr, kd.name.clone())).collect();
     let mut have_tasks: HashMap<String, Arc<AtomicU64>> = HashMap::new();
     while let Some(mevt) = &monitor_handle.next().await {
         let ikd = known_devices.clone();
         let tx_metrics = tx_metrics.clone();
         if let MonitorEvent::DeviceFound(devid) = mevt {
-            if allowlist.len() > 0 {
+            if !allowlist.is_empty() {
                 if !allowlist.contains_key(&devid.device) {
                     continue;
                 } else {
                     debug!("not allowlisted {}", devid.device.to_string());
                 }
-            } else {
-                if blocklist.contains_key(&devid.device) {
+            } else if blocklist.contains_key(&devid.device) {
                     debug!("blocklisted {}", devid.device.to_string());
                     continue;
-                }
             }
             let devkey = &devid.device.to_owned().to_string();
             let mut newdev = false;

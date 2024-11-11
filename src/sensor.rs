@@ -73,13 +73,8 @@ impl SensorData for WaterSensor {
             let mut labels = base_labels.clone();
             labels.push(("adc".to_owned(), format!("{}", idx)));
             const CLAMP: i16 = 0x0fff;
-            let voltage_value = 3600f64 / 4096f64 * if *raw_adc_val > CLAMP {
-                CLAMP
-            } else if *raw_adc_val < -CLAMP {
-                -CLAMP
-            } else {
-                *raw_adc_val
-            } as f64;
+            let clamped_raw = (*raw_adc_val).clamp(-CLAMP, CLAMP);
+            let voltage_value = 3600f64 / 4096f64 * clamped_raw as f64;
             raw_adc.get_or_create(&labels).set(*raw_adc_val as f64);
             voltage.get_or_create(&labels).set(voltage_value);
         }
