@@ -282,8 +282,20 @@ fn load_known_devices_from_file(
     s: &str,
     allow_empty: bool,
 ) -> Result<Vec<KnownDevice>, LoadKnownError> {
-    let rdr = std::fs::File::open(s)?;
-    load_known_devices_from_reader(rdr, allow_empty)
+    match std::fs::File::open(s) {
+        Ok(file) => load_known_devices_from_reader(file, allow_empty),
+        Err(e) => {
+            if let Some(ose) = e.raw_os_error() {
+                if allow_empty && ose == libc::ENOENT {
+                    Ok(Vec::new())
+                } else {
+                    Err(LoadKnownError::IOError(e))
+                }
+            } else {
+                Err(LoadKnownError::IOError(e))
+            }
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -540,8 +552,14 @@ async fn main() -> Result<(), ProgramError> {
     };
 
     let known_devices = if let Some(kfn) = known_devices_file {
-        load_known_devices_from_file(kfn, *allow_empty_known_file)
-            .expect("failed to load known devices")
+        match load_known_devices_from_file(kfn, *allow_empty_known_file) {
+            Ok(known_devices) => known_devices,
+            Err(e) => {
+                error!("Failed to load known devices {}: {:?}", kfn, e);
+                Vec::new()
+            }
+        }
+
     } else {
         Vec::new()
     };
