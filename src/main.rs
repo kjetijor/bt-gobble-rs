@@ -392,83 +392,8 @@ impl From<bluer::Error> for ProgramError {
 const GIT_REV: &str = env!("GIT_REV");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), ProgramError> {
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", format!("{}=INFO", std::module_path!()));
-    }
-    env_logger::init();
-    info!("bt-gobble-rs ({VERSION}/{GIT_REV}) starting");
-    let matches = Command::new("bt-gobble-rs")
-        .arg(
-            Arg::new("adapter-name")
-                .long("adapter-name")
-                .short('i'),
-        )
-        .arg(
-            Arg::new("metrics-dir")
-                .long("metrics-dir")
-                .short('D')
-                .default_value("/var/lib/prometheus/node-exporter"),
-        )
-        .arg(
-            Arg::new("stale-seconds")
-                .long("stale-seconds")
-                .short('S')
-                .default_value("600")
-                .value_parser(clap::value_parser!(f64)),
-        )
-        .arg(
-            Arg::new("file-prefix")
-                .short('P')
-                .long("file-prefix")
-                .default_value("bt-gobbler-rs"),
-        )
-        .arg(Arg::new("metric-prefix").long("metric-prefix").short('M'))
-        .arg(
-            Arg::new("known-file")
-                .long("known-file")
-                .short('K')
-                .default_value("/etc/bt-gobbler/known-devices.yaml"),
-        )
-        .arg(
-            Arg::new("allow-empty-known-file")
-                .long("allow-empty-known-file")
-                .default_value("false")
-                .value_parser(clap::value_parser!(bool)),
-        )
-        .arg(
-            Arg::new("const-label")
-                .long("const-label")
-                .short('l')
-                .action(ArgAction::Append)
-                .value_parser(clap::builder::ValueParser::new(parse_label)),
-        )
-        .arg(
-            Arg::new("blocklist-file")
-                .long("blocklist-file")
-                .default_value("/etc/bt-gobbler/blocklist.yaml"),
-        )
-        .arg(
-            Arg::new("block")
-                .long("block")
-                .short('B')
-                .action(ArgAction::Append),
-        )
-        .arg(
-            Arg::new("allowlist-file")
-                .long("allowlist-file")
-                .default_value("/etc/bt-gobbler/allowlist.yaml"),
-        )
-        .arg(
-            Arg::new("allow")
-                .long("allow")
-                .short('A')
-                .action(ArgAction::Append),
-        )
-        .get_matches();
-    let adapter_name = matches.get_one::<String>("adapter-name");
+async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
+   let adapter_name = matches.get_one::<String>("adapter-name");
     let metrics_dir = matches
         .get_one::<String>("metrics-dir")
         .expect("No metrics dir given");
@@ -732,5 +657,86 @@ async fn main() -> Result<(), ProgramError> {
         }
     }
 
+    Ok(())
+}
+
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), ProgramError> {
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", format!("{}=INFO", std::module_path!()));
+    }
+    env_logger::init();
+    info!("bt-gobble-rs ({VERSION}/{GIT_REV}) starting");
+    let matches = Command::new("bt-gobble-rs")
+        .arg(
+            Arg::new("adapter-name")
+                .long("adapter-name")
+                .short('i'),
+        )
+        .arg(
+            Arg::new("metrics-dir")
+                .long("metrics-dir")
+                .short('D')
+                .default_value("/var/lib/prometheus/node-exporter"),
+        )
+        .arg(
+            Arg::new("stale-seconds")
+                .long("stale-seconds")
+                .short('S')
+                .default_value("600")
+                .value_parser(clap::value_parser!(f64)),
+        )
+        .arg(
+            Arg::new("file-prefix")
+                .short('P')
+                .long("file-prefix")
+                .default_value("bt-gobbler-rs"),
+        )
+        .arg(Arg::new("metric-prefix").long("metric-prefix").short('M'))
+        .arg(
+            Arg::new("known-file")
+                .long("known-file")
+                .short('K')
+                .default_value("/etc/bt-gobbler/known-devices.yaml"),
+        )
+        .arg(
+            Arg::new("allow-empty-known-file")
+                .long("allow-empty-known-file")
+                .default_value("false")
+                .value_parser(clap::value_parser!(bool)),
+        )
+        .arg(
+            Arg::new("const-label")
+                .long("const-label")
+                .short('l')
+                .action(ArgAction::Append)
+                .value_parser(clap::builder::ValueParser::new(parse_label)),
+        )
+        .arg(
+            Arg::new("blocklist-file")
+                .long("blocklist-file")
+                .default_value("/etc/bt-gobbler/blocklist.yaml"),
+        )
+        .arg(
+            Arg::new("block")
+                .long("block")
+                .short('B')
+                .action(ArgAction::Append),
+        )
+        .arg(
+            Arg::new("allowlist-file")
+                .long("allowlist-file")
+                .default_value("/etc/bt-gobbler/allowlist.yaml"),
+        )
+        .arg(
+            Arg::new("allow")
+                .long("allow")
+                .short('A')
+                .action(ArgAction::Append),
+        )
+        .get_matches();
+ 
+    run_gobbler(matches).await?;
     Ok(())
 }
