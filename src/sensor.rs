@@ -34,7 +34,7 @@ impl WaterSensor {
             return Err(ParseError::BadLength);
         }
         if d[0] != b'L' || d[1] != b'K' {
-            return Err(ParseError::BadWaterMagic((d[0] as u16) << 8 | d[1] as u16));
+            return Err(ParseError::BadWaterMagic(((d[0] as u16) << 8) | (d[1] as u16)));
         }
         log::debug!("water data at {:x} {:x}", &d[4], &d[5]);
         let voltages = vec![i16_at!(d, 4), i16_at!(d,6)];
@@ -111,7 +111,7 @@ impl fmt::Display for ParseError {
                 f,
                 "bad leak magic {:x} expected {:x}",
                 mg,
-                (b'L' as u16) << 8 | b'K' as u16
+                ((b'L' as u16) << 8) | (b'K' as u16)
             ),
         }
     }
@@ -221,7 +221,7 @@ mod test {
     fn test_bad_water() {
         assert!(WaterSensor::parse(&[]).is_err());
         assert!(WaterSensor::parse(&[0xff, 0xff, 0x01, 0x02, 0x03, 0x04, 0x05]).is_err());
-        assert!(WaterSensor::parse(&[b'L', b'K']).is_err());
+        assert!(WaterSensor::parse(b"LK").is_err());
     }
     #[test]
     fn test_good_water() {
