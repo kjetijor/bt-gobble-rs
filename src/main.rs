@@ -162,11 +162,11 @@ fn stale_clean_once(prefix: &str, dir: &str, clean_epoch: Duration, dry_run: boo
         
             
 
-            if stale_dur < clean_epoch {
+            if stale_dur > clean_epoch {
                 debug!("Not deleting {:?} because it's not stale yet", &c);
                 continue;
             }
-            info!("Deleting {:?} because stale marker {:?} is after clean epoch {:?} (dry run: {})", &c, stale_dur, clean_epoch, dry_run);
+            info!("Deleting {:?} because stale marker {:?} is before clean epoch {:?} (dry run: {})", &c, stale_dur, clean_epoch, dry_run);
             if dry_run {
                 continue;
             }
