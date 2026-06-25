@@ -402,7 +402,7 @@ impl From<bluer::Error> for ProgramError {
 const GIT_REV: &str = env!("GIT_REV");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-async fn run_gobbler(
+struct GobblerConfig {
     adapter_name: Option<String>,
     metrics_dir: String,
     stale_seconds: f64,
@@ -415,7 +415,23 @@ async fn run_gobbler(
     block: Vec<String>,
     allowlist_file: String,
     allow: Vec<String>,
-) -> Result<(), ProgramError> {
+}
+
+async fn run_gobbler(cfg: GobblerConfig) -> Result<(), ProgramError> {
+    let GobblerConfig {
+        adapter_name,
+        metrics_dir,
+        stale_seconds,
+        file_prefix,
+        metric_prefix,
+        known_file,
+        allow_empty_known_file,
+        const_label,
+        blocklist_file,
+        block,
+        allowlist_file,
+        allow,
+    } = cfg;
     let mut blocklist_vec = load_addrlist_file(&blocklist_file);
     for b in block {
         match bluer::Address::from_str(&b) {
@@ -748,11 +764,11 @@ async fn main() -> Result<(), ProgramError> {
             allowlist_file,
             allow,
         } => {
-            run_gobbler(
+            run_gobbler(GobblerConfig {
                 adapter_name,
-                cli.dir,
-                cli.max_age_seconds,
-                cli.file_prefix,
+                metrics_dir: cli.dir,
+                stale_seconds: cli.max_age_seconds,
+                file_prefix: cli.file_prefix,
                 metric_prefix,
                 known_file,
                 allow_empty_known_file,
@@ -761,7 +777,7 @@ async fn main() -> Result<(), ProgramError> {
                 block,
                 allowlist_file,
                 allow,
-            )
+            })
             .await?;
         }
         Commands::CleanStale { dry_run } => {
