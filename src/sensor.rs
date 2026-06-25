@@ -34,10 +34,12 @@ impl WaterSensor {
             return Err(ParseError::BadLength);
         }
         if d[0] != b'L' || d[1] != b'K' {
-            return Err(ParseError::BadWaterMagic(((d[0] as u16) << 8) | (d[1] as u16)));
+            return Err(ParseError::BadWaterMagic(
+                ((d[0] as u16) << 8) | (d[1] as u16),
+            ));
         }
         log::debug!("water data at {:x} {:x}", &d[4], &d[5]);
-        let voltages = vec![i16_at!(d, 4), i16_at!(d,6)];
+        let voltages = vec![i16_at!(d, 4), i16_at!(d, 6)];
 
         Ok(WaterSensor {
             flags: d[2],
@@ -52,13 +54,9 @@ impl SensorData for WaterSensor {
         let base_labels = Vec::from(add_labels);
         let water_present = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         r.register("water_present", "Water present", water_present.clone());
-        water_present.get_or_create(&base_labels).set(
-            if self.flags & 0x01 > 0 {
-                1.0
-            } else {
-                0.0
-            }
-        );
+        water_present
+            .get_or_create(&base_labels)
+            .set(if self.flags & 0x01 > 0 { 1.0 } else { 0.0 });
         let raw_flags = Family::<Vec<(String, String)>, Gauge<f64, AtomicU64>>::default();
         r.register("raw_flags", "Raw flag value", raw_flags.clone());
         raw_flags.get_or_create(&base_labels).set(self.flags as f64);
@@ -225,31 +223,32 @@ mod test {
     }
     #[test]
     fn test_good_water() {
-        let tcs = [(
-            [b'L', b'K', 0x01, 0x02, 0x00, 0x00, 0x00, 0x00],
-            WaterSensor {
-                flags: 0x01,
-                voltages: vec![0,0],
-                seq: 0x02,
-            },
-        ),
-        (
-            [b'L', b'K', 0x00, 0xff, 0xff, 0xff, 0xff, 0xff],
-            WaterSensor {
-                flags: 0x00,
-                voltages: vec![-1,-1],
-                seq: 255,
-            },    
-        ),
-        (
-            [0x4c, 0x4b, 0x01, 0x4a, 0x0d, 0xb0, 0x1a, 0xa1],
-            WaterSensor{
-                flags: 0x01,
-                voltages: vec![0x0db0, 0x1aa1],
-                seq: 0x4a,
-            }
-
-        )];
+        let tcs = [
+            (
+                [b'L', b'K', 0x01, 0x02, 0x00, 0x00, 0x00, 0x00],
+                WaterSensor {
+                    flags: 0x01,
+                    voltages: vec![0, 0],
+                    seq: 0x02,
+                },
+            ),
+            (
+                [b'L', b'K', 0x00, 0xff, 0xff, 0xff, 0xff, 0xff],
+                WaterSensor {
+                    flags: 0x00,
+                    voltages: vec![-1, -1],
+                    seq: 255,
+                },
+            ),
+            (
+                [0x4c, 0x4b, 0x01, 0x4a, 0x0d, 0xb0, 0x1a, 0xa1],
+                WaterSensor {
+                    flags: 0x01,
+                    voltages: vec![0x0db0, 0x1aa1],
+                    seq: 0x4a,
+                },
+            ),
+        ];
         for (bs, res) in tcs {
             assert_eq!(WaterSensor::parse(&bs), Ok(res));
         }

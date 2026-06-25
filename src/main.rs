@@ -1,5 +1,8 @@
-use bluer::{monitor::{Monitor, MonitorEvent, Pattern, RssiSamplingPeriod}, Address};
-use clap::{Arg, ArgAction, Command};
+use bluer::{
+    monitor::{Monitor, MonitorEvent, Pattern, RssiSamplingPeriod},
+    Address,
+};
+use clap::{ArgAction, Parser, Subcommand};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
 use prometheus_client::encoding::text::encode;
@@ -107,7 +110,7 @@ impl From<std::num::ParseFloatError> for StaleFileError {
 
 const STALE_MARKER: &str = "# Stale after ";
 
-fn get_file_stale(pb: &PathBuf) -> Result<Option<Duration>, StaleFileError> {
+fn get_file_stale(pb: &PathBuf) -> Result<Duration, StaleFileError> {
     let contents = std::fs::read_to_string(pb)?;
     let spl: Vec<_> = contents
         .split('\n')
@@ -120,59 +123,66 @@ fn get_file_stale(pb: &PathBuf) -> Result<Option<Duration>, StaleFileError> {
     if STALE_MARKER.len() > first.len() - 1 {
         return Err(StaleFileError::BadMarker);
     }
-    let file_stale_epoch =
-        Duration::from_secs_f64(first[STALE_MARKER.len()..first.len() - 1].parse()?);
-    let now_epoch = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
-    Ok(now_epoch.checked_sub(file_stale_epoch))
+   Ok(Duration::from_secs_f64(first[STALE_MARKER.len()..first.len() - 1].parse()?))
 }
 
-async fn stale_cleaner(prefix: String, dir: String, check_interval: Duration, max_age: Duration) {
-    info!("Starting stale-cleaner on {dir} with prefix {prefix} for checking every {} with stale age {}", check_interval.as_secs_f64(), max_age.as_secs_f64());
-    loop {
-        tokio::time::sleep(check_interval).await;
-        let rd = match std::fs::read_dir(&dir) {
+fn stale_clean_once(prefix: &str, dir: &str, clean_epoch: Duration, dry_run: bool) {
+    let rd = match std::fs::read_dir(dir) {
+        Err(e) => {
+            error!("stale checker failed to read {} {:?}", dir, e);
+            return;
+        }
+        Ok(d) => d,
+    };
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for c in rd {
+        match c {
             Err(e) => {
-                error!("stale checker failed to read {} {:?}", dir, e);
+                error!("Failed to get entry {:?}", e);
                 continue;
             }
-            Ok(d) => d,
+            Ok(de) => {
+                if !de.file_name().to_string_lossy().starts_with(prefix) {
+                    continue;
+                }
+                candidates.push(de.path());
+            }
+        }
+    }
+    for c in candidates {
+        let gfs = get_file_stale(&c);
+        let stale_dur = match gfs {
+            Err(error) => {
+                error!("Failed to get file staleness {:?} {:?}", &c, error);
+                continue;
+            }
+            Ok(d) => d, 
         };
-        let mut candidates: Vec<PathBuf> = Vec::new();
-        for c in rd {
-            match c {
-                Err(e) => {
-                    error!("Failed to get entry {:?}", e);
-                    continue;
-                }
-                Ok(de) => {
-                    if !de
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(prefix.as_str())
-                    {
-                        continue;
-                    }
-                    candidates.push(de.path());
-                }
+        
+        
+            
+
+            if stale_dur < clean_epoch {
+                debug!("Not deleting {:?} because it's not stale yet", &c);
+                continue;
             }
-        }
-        for c in candidates {
-            let gfs = get_file_stale(&c);
-            let stale_dur = match gfs {
-                Err(error) => {
-                    error!("Failed to get file staleness {:?} {:?}", &c, error);
-                    continue;
-                }
-                Ok(None) => continue,
-                Ok(Some(d)) => d,
-            };
-            if stale_dur > max_age {
-                info!("Deleting {:?} because {:?} > {:?}", &c, stale_dur, max_age);
-                if let Err(e) = std::fs::remove_file(&c) {
-                    error!("Failed to delete {:?}: {:?}", &c, e)
-                }
+            info!("Deleting {:?} because stale marker {:?} is after clean epoch {:?} (dry run: {})", &c, stale_dur, clean_epoch, dry_run);
+            if dry_run {
+                continue;
             }
-        }
+            if let Err(e) = std::fs::remove_file(&c) {
+                error!("Failed to delete {:?}: {:?}", &c, e)
+            }
+        
+    }
+}
+
+async fn stale_cleaner(prefix: String, dir: String, check_interval: Duration) {
+    info!("Starting stale-cleaner on {dir} with prefix {prefix} for checking every {}", check_interval.as_secs_f64());
+    loop {
+        tokio::time::sleep(check_interval).await;
+        let clean_epoch = Duration::from_secs_f64(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs_f64());
+        stale_clean_once(&prefix, &dir, clean_epoch, false);
     }
 }
 
@@ -359,9 +369,9 @@ fn load_addrlist_file(l: &String) -> Vec<bluer::Address> {
             Vec::new()
         }
         Ok(s) => serde_yaml::from_str(&s).unwrap_or_else(|e| {
-                warn!("Failed to deserialize from {} {:?}", l, e);
-                Vec::new()
-            }),
+            warn!("Failed to deserialize from {} {:?}", l, e);
+            Vec::new()
+        }),
     };
     input
         .iter()
@@ -392,52 +402,33 @@ impl From<bluer::Error> for ProgramError {
 const GIT_REV: &str = env!("GIT_REV");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
-   let adapter_name = matches.get_one::<String>("adapter-name");
-    let metrics_dir = matches
-        .get_one::<String>("metrics-dir")
-        .expect("No metrics dir given");
-    let stale_secs = matches
-        .get_one::<f64>("stale-seconds")
-        .expect("No stale secs given");
-    let file_prefix = matches
-        .get_one::<String>("file-prefix")
-        .expect("No metrics file prefix given");
-    let known_devices_file = matches.get_one::<String>("known-file");
-    let allow_empty_known_file = matches
-        .get_one::<bool>("allow-empty-known-file")
-        .expect("bug");
-    let metric_prefix = matches.get_one::<String>("metric-prefix");
-    let const_labels: Vec<(String, String)> =
-        if let Some(m) = matches.get_many::<(String, String)>("const-label") {
-            m.map(|(a, b)| (a.to_owned(), b.to_owned())).collect()
-        } else {
-            Vec::new()
-        };
-    let blocklist_file = matches
-        .get_one::<String>("blocklist-file")
-        .expect("expected blocklist filename");
-    
-    let mut blocklist_vec = load_addrlist_file(blocklist_file);
-    if let Some(blocks) = matches.get_many::<String>("block") {
-        for block in blocks {
-            match bluer::Address::from_str(block) {
-                Err(e) => warn!("Invalid address {} {:?}", block, e),
-                Ok(a) => blocklist_vec.push(a),
-            }
+async fn run_gobbler(
+    adapter_name: Option<String>,
+    metrics_dir: String,
+    stale_seconds: f64,
+    file_prefix: String,
+    metric_prefix: Option<String>,
+    known_file: String,
+    allow_empty_known_file: bool,
+    const_label: Vec<(String, String)>,
+    blocklist_file: String,
+    block: Vec<String>,
+    allowlist_file: String,
+    allow: Vec<String>,
+) -> Result<(), ProgramError> {
+    let mut blocklist_vec = load_addrlist_file(&blocklist_file);
+    for b in block {
+        match bluer::Address::from_str(&b) {
+            Err(e) => warn!("Invalid address {} {:?}", b, e),
+            Ok(a) => blocklist_vec.push(a),
         }
     }
 
-    let allowlist_file = matches
-        .get_one::<String>("allowlist-file")
-        .expect("expected allowlist filename");
-    let mut allowlist_vec = load_addrlist_file(allowlist_file);
-    if let Some(allows) = matches.get_many::<String>("allow") {
-        for allow in allows {
-            match bluer::Address::from_str(allow) {
-                Err(e) => warn!("Invalid address {} {:?}", allow, e),
-                Ok(a) => allowlist_vec.push(a),
-            }
+    let mut allowlist_vec = load_addrlist_file(&allowlist_file);
+    for a in allow {
+        match bluer::Address::from_str(&a) {
+            Err(e) => warn!("Invalid address {} {:?}", a, e),
+            Ok(a) => allowlist_vec.push(a),
         }
     }
 
@@ -452,41 +443,39 @@ async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
     let allowlist: HashMap<bluer::Address, ()> =
         allowlist_vec.into_iter().map(|a| (a, ())).collect();
 
-
-    let allowstr = blocklist.iter().fold(String::new(), |acc, (addr,_)| if acc.is_empty() {
-        addr.to_string()
-    } else {
-        format!("{},{}",acc,addr)
+    let allowstr = blocklist.iter().fold(String::new(), |acc, (addr, _)| {
+        if acc.is_empty() {
+            addr.to_string()
+        } else {
+            format!("{},{}", acc, addr)
+        }
     });
 
-    let blockstr = blocklist.iter().fold(String::new(), |acc, (addr, _)| if acc.is_empty() {
-        addr.to_string()
-    } else {
-        format!("{},{}",acc,addr)
+    let blockstr = blocklist.iter().fold(String::new(), |acc, (addr, _)| {
+        if acc.is_empty() {
+            addr.to_string()
+        } else {
+            format!("{},{}", acc, addr)
+        }
     });
 
     info!("Allowlist: {allowstr}");
     info!("Blocklist: {blockstr}");
 
     let writeopts = WriteMetricsOptions {
-        dir: metrics_dir.to_owned(),
-        file_prefix: file_prefix.to_owned(), // validate
-        metric_prefix: metric_prefix.map(|s| s.to_owned()), // validate
-        const_labels,                        // validate
-        stale_after: Duration::from_secs_f64(*stale_secs), //validate <set min ?>
+        dir: metrics_dir,
+        file_prefix,
+        metric_prefix,
+        const_labels: const_label,
+        stale_after: Duration::from_secs_f64(stale_seconds),
     };
 
-    let known_devices = if let Some(kfn) = known_devices_file {
-        match load_known_devices_from_file(kfn, *allow_empty_known_file) {
-            Ok(known_devices) => known_devices,
-            Err(e) => {
-                error!("Failed to load known devices {}: {:?}", kfn, e);
-                Vec::new()
-            }
+    let known_devices = match load_known_devices_from_file(&known_file, allow_empty_known_file) {
+        Ok(known_devices) => known_devices,
+        Err(e) => {
+            error!("Failed to load known devices {}: {:?}", known_file, e);
+            Vec::new()
         }
-
-    } else {
-        Vec::new()
     };
     if !allow_empty_known_file && known_devices.is_empty() {
         error!("Empty known devices and not allowing empty known devices");
@@ -507,7 +496,6 @@ async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
             file_prefix,
             clean_dir,
             Duration::from_secs(5),
-            Duration::from_secs(600),
         )
         .await
     });
@@ -515,13 +503,17 @@ async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
     debug!("known devices is {:?}", known_devices);
     let session = bluer::Session::new().await?;
     let adapter = match adapter_name {
-        Some(n) => session.adapter(n)?,
-        None => session.default_adapter().await?
+        Some(n) => session.adapter(&n)?,
+        None => session.default_adapter().await?,
     };
     let adapter_addr = adapter.address().await?;
-    info!("Opened adapter {}/{}", adapter.name(), adapter_addr.to_string());
+    info!(
+        "Opened adapter {}/{}",
+        adapter.name(),
+        adapter_addr.to_string()
+    );
     adapter.set_powered(true).await?;
-/* WTF?!
+    /* WTF?!
     for prop in adapter.all_properties().await? {
         debug!("adapter prop {:?}", prop);
     }; */
@@ -549,7 +541,10 @@ async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
             ..Default::default()
         })
         .await?;
-    let aliases: HashMap<Address,String> = known_devices.iter().map(|kd| (kd.addr, kd.name.clone())).collect();
+    let aliases: HashMap<Address, String> = known_devices
+        .iter()
+        .map(|kd| (kd.addr, kd.name.clone()))
+        .collect();
     let mut have_tasks: HashMap<String, Arc<AtomicU64>> = HashMap::new();
     while let Some(mevt) = &monitor_handle.next().await {
         let ikd = known_devices.clone();
@@ -562,8 +557,8 @@ async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
                     debug!("not allowlisted {}", devid.device.to_string());
                 }
             } else if blocklist.contains_key(&devid.device) {
-                    debug!("blocklisted {}", devid.device.to_string());
-                    continue;
+                debug!("blocklisted {}", devid.device.to_string());
+                continue;
             }
             let devkey = &devid.device.to_owned().to_string();
             let mut newdev = false;
@@ -582,10 +577,13 @@ async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
             if oldval != 0 {
                 panic!("oldval != 0");
             }
-            let alias = aliases.get(&devid.device).map_or_else(
-                || "".to_owned(),
-                |alias|alias.clone());
-            info!("Discovered device {:?} (new: {:?}, alias: {})", devid, newdev, alias);
+            let alias = aliases
+                .get(&devid.device)
+                .map_or_else(|| "".to_owned(), |alias| alias.clone());
+            info!(
+                "Discovered device {:?} (new: {:?}, alias: {})",
+                devid, newdev, alias
+            );
 
             let dev = adapter.device(devid.device)?;
             tokio::spawn(async move {
@@ -660,6 +658,75 @@ async fn run_gobbler(matches: clap::ArgMatches) -> Result<(), ProgramError> {
     Ok(())
 }
 
+#[derive(Parser)]
+#[command(name = "bt-gobbler-rs", version = VERSION, about = "A Bluetooth LE sensor data gobbler for Prometheus")]
+struct Cli {
+    #[arg(
+        long = "dir",
+        short = 'D',
+        default_value = "/var/lib/prometheus/node-exporter"
+    )]
+    dir: String,
+
+    #[arg(long = "file-prefix", short = 'P', default_value = "bt-gobbler-rs")]
+    file_prefix: String,
+
+    #[arg(long = "max-age-seconds", short = 'S', default_value = "600")]
+    max_age_seconds: f64,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Gobble {
+        #[arg(long = "adapter-name", short = 'i')]
+        adapter_name: Option<String>,
+
+        #[arg(long = "metric-prefix", short = 'M')]
+        metric_prefix: Option<String>,
+
+        #[arg(
+            long = "known-file",
+            short = 'K',
+            default_value = "/etc/bt-gobbler/known-devices.yaml"
+        )]
+        known_file: String,
+
+        #[arg(long = "allow-empty-known-file", default_value = "false")]
+        allow_empty_known_file: bool,
+
+        #[arg(long = "const-label", short = 'l', action = ArgAction::Append, value_parser = parse_label)]
+        const_label: Vec<(String, String)>,
+
+        #[arg(
+            long = "blocklist-file",
+            default_value = "/etc/bt-gobbler/blocklist.yaml"
+        )]
+        blocklist_file: String,
+
+        #[arg(long = "block", short = 'B', action = ArgAction::Append)]
+        block: Vec<String>,
+
+        #[arg(
+            long = "allowlist-file",
+            default_value = "/etc/bt-gobbler/allowlist.yaml"
+        )]
+        allowlist_file: String,
+
+        #[arg(long = "allow", short = 'A', action = ArgAction::Append)]
+        allow: Vec<String>,
+    },
+    CleanStale {
+        #[arg(
+            long = "dry-run",
+            default_value = "false",
+             help = "If true, will only log files that would be deleted without actually deleting them"
+        )]
+        dry_run: bool,
+    },
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), ProgramError> {
@@ -668,75 +735,43 @@ async fn main() -> Result<(), ProgramError> {
     }
     env_logger::init();
     info!("bt-gobble-rs ({VERSION}/{GIT_REV}) starting");
-    let matches = Command::new("bt-gobble-rs")
-        .arg(
-            Arg::new("adapter-name")
-                .long("adapter-name")
-                .short('i'),
-        )
-        .arg(
-            Arg::new("metrics-dir")
-                .long("metrics-dir")
-                .short('D')
-                .default_value("/var/lib/prometheus/node-exporter"),
-        )
-        .arg(
-            Arg::new("stale-seconds")
-                .long("stale-seconds")
-                .short('S')
-                .default_value("600")
-                .value_parser(clap::value_parser!(f64)),
-        )
-        .arg(
-            Arg::new("file-prefix")
-                .short('P')
-                .long("file-prefix")
-                .default_value("bt-gobbler-rs"),
-        )
-        .arg(Arg::new("metric-prefix").long("metric-prefix").short('M'))
-        .arg(
-            Arg::new("known-file")
-                .long("known-file")
-                .short('K')
-                .default_value("/etc/bt-gobbler/known-devices.yaml"),
-        )
-        .arg(
-            Arg::new("allow-empty-known-file")
-                .long("allow-empty-known-file")
-                .default_value("false")
-                .value_parser(clap::value_parser!(bool)),
-        )
-        .arg(
-            Arg::new("const-label")
-                .long("const-label")
-                .short('l')
-                .action(ArgAction::Append)
-                .value_parser(clap::builder::ValueParser::new(parse_label)),
-        )
-        .arg(
-            Arg::new("blocklist-file")
-                .long("blocklist-file")
-                .default_value("/etc/bt-gobbler/blocklist.yaml"),
-        )
-        .arg(
-            Arg::new("block")
-                .long("block")
-                .short('B')
-                .action(ArgAction::Append),
-        )
-        .arg(
-            Arg::new("allowlist-file")
-                .long("allowlist-file")
-                .default_value("/etc/bt-gobbler/allowlist.yaml"),
-        )
-        .arg(
-            Arg::new("allow")
-                .long("allow")
-                .short('A')
-                .action(ArgAction::Append),
-        )
-        .get_matches();
- 
-    run_gobbler(matches).await?;
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Gobble {
+            adapter_name,
+            metric_prefix,
+            known_file,
+            allow_empty_known_file,
+            const_label,
+            blocklist_file,
+            block,
+            allowlist_file,
+            allow,
+        } => {
+            run_gobbler(
+                adapter_name,
+                cli.dir,
+                cli.max_age_seconds,
+                cli.file_prefix,
+                metric_prefix,
+                known_file,
+                allow_empty_known_file,
+                const_label,
+                blocklist_file,
+                block,
+                allowlist_file,
+                allow,
+            )
+            .await?;
+        }
+        Commands::CleanStale { dry_run } => {
+            stale_clean_once(
+                &cli.file_prefix,
+                &cli.dir,
+                Duration::from_secs_f64(cli.max_age_seconds),
+                dry_run,
+            );
+        }
+    }
     Ok(())
 }
